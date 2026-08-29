@@ -16,6 +16,10 @@ on:
         description: '版本号（须与主仓 tag v<version> 一致）'
         required: true
         type: string
+      source-ref:
+        description: '源仓 ref（默认 refs/tags/v<version>；测试可填 refs/heads/main）'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -35,7 +39,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: myelnn/robovaiUSB
-          ref: refs/tags/v${{ inputs.version }}
+          ref: ${{ inputs.source-ref || format('refs/tags/v{0}', inputs.version) }}
           token: ${{ secrets.SOURCE_READ_TOKEN }}
           path: src
 
@@ -79,7 +83,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: myelnn/robovaiUSB
-          ref: refs/tags/v${{ inputs.version }}
+          ref: ${{ inputs.source-ref || format('refs/tags/v{0}', inputs.version) }}
           token: ${{ secrets.SOURCE_READ_TOKEN }}
           path: src
 
