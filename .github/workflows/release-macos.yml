@@ -139,6 +139,9 @@ jobs:
           RVAI_RELEASE_EMAIL: ${{ secrets.RVAI_RELEASE_EMAIL }}
           RVAI_RELEASE_PASSWORD: ${{ secrets.RVAI_RELEASE_PASSWORD }}
         run: |
+          # --mac-target aarch64：新版 Rust stable 已移除 universal2-apple-darwin
+          # rust-std（tauri 一键 universal2 不可用），先出 arm64 dmg（runner 原生架构）。
           node tauri-spike/scripts/release/release-publish.mjs \
             --ci --skip-bump --skip-tag \
+            --mac-target aarch64 \
             --platform macos --form pc
