@@ -104,8 +104,8 @@ jobs:
       - name: Setup Rust（pc 形态需 cargo tauri build）
         uses: dtolnay/rust-toolchain@stable
         with:
-          # universal2 也要装：cargo tauri build --target universal2-apple-darwin 需要该 target
-          targets: aarch64-apple-darwin,x86_64-apple-darwin,universal2-apple-darwin
+          # 只装 aarch64（--mac-target aarch64 出 arm64 dmg）；Rust stable 已移除 universal2 target
+          targets: aarch64-apple-darwin
 
       - name: Cache cargo
         uses: actions/cache@v4
