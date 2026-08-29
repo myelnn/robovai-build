@@ -1,0 +1,81 @@
+# RoboVAI 测试 CI —— 隔离构建仓版（myelnn/robovai-build，公开）
+#
+# 主仓（私有）Actions 计费墙下跑不了 ci.yml，本 workflow 在公开仓免费跑同套测试：
+# 从私有源仓拉 refs/heads/main（默认），跑 ①npm run check（licenses+secrets+eol+
+# backend 全部测试）②frontend typecheck + 测试。与 release-*.yml 同模式，不含源码。
+#
+# 触发：workflow_dispatch（手动）或 schedule（每周一次兜底）。
+# 凭据 Secrets：SOURCE_READ_TOKEN（读私有源仓，contents:read）。
+
+name: test
+
+on:
+  workflow_dispatch:
+    inputs:
+      source-ref:
+        description: '源仓 ref（默认 refs/heads/main）'
+        required: false
+        type: string
+  schedule:
+    - cron: '17 3 * * 1'   # 每周一 03:17 UTC 兜底跑一次
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: src
+
+jobs:
+  check:
+    name: check (licenses/secrets/eol/tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout 源仓
+        uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: ${{ inputs.source-ref || 'refs/heads/main' }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: src
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 完整检查（licenses + secrets + eol + 测试）
+        run: npm run check
+
+  frontend:
+    name: frontend (typecheck + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout 源仓
+        uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: ${{ inputs.source-ref || 'refs/heads/main' }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: src
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/tauri-spike/frontend/package-lock.json
+
+      - name: Install
+        working-directory: src/tauri-spike/frontend
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: src/tauri-spike/frontend
+        run: npx tsc -b
+
+      - name: Test
+        working-directory: src/tauri-spike/frontend
+        run: npm test
