@@ -1,0 +1,144 @@
+# RoboVAI Linux 发布 CI —— 隔离构建仓版（myelnn/robovai-build，公开）
+#
+# 同 release-macos.yml 模式：不含源码，构建时从私有源仓 myelnn/robovaiUSB
+# 拉 refs/tags/v<version>（secrets.SOURCE_READ_TOKEN，contents:read）。
+# 公开仓 = 免费无限 Actions。
+#
+# 触发：workflow_dispatch 输出版本号。两个 job 并行：
+#   linux-usb（零 Rust exe，WebKitGTK 开窗，快）+ linux-pc（cargo tauri build 出 deb，慢）。
+
+name: release-linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（须与主仓 tag v<version> 一致）'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: src
+
+jobs:
+  # ── linux-usb：便携版（零 Rust exe，系统 WebKitGTK 开窗）──────────────────
+  linux-usb:
+    name: linux / usb (x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout 源仓 @ tag
+        uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: refs/tags/v${{ inputs.version }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: src
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/tauri-spike/frontend/package-lock.json
+
+      - name: 下载 runtime + core（setup）
+        run: node tauri-spike/backend/bin/setup.mjs
+
+      - name: 同步 resources（sync-resources）
+        run: node tauri-spike/scripts/sync-resources.mjs
+
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: src/tauri-spike/frontend
+
+      - name: 构建前端（usb 模式）
+        run: npm run build:usb
+        working-directory: src/tauri-spike/frontend
+
+      - name: 发布 linux-usb
+        env:
+          RVAI_RELEASE_EMAIL: ${{ secrets.RVAI_RELEASE_EMAIL }}
+          RVAI_RELEASE_PASSWORD: ${{ secrets.RVAI_RELEASE_PASSWORD }}
+        run: |
+          node tauri-spike/scripts/release/release-publish.mjs \
+            --ci --skip-bump --skip-tag \
+            --platform linux --form usb
+
+  # ── linux-pc：安装版（cargo tauri build --features pc 出 deb）─────────────
+  linux-pc:
+    name: linux / pc (x64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout 源仓 @ tag
+        uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: refs/tags/v${{ inputs.version }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          path: src
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: src/tauri-spike/frontend/package-lock.json
+
+      - name: 安装 Tauri 系统依赖（WebKitGTK 等）
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Rust（pc 形态需 cargo tauri build）
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src/tauri-spike/src-tauri/target
+          key: linux-pc-cargo-${{ hashFiles('src/tauri-spike/src-tauri/Cargo.lock') }}
+          restore-keys: linux-pc-cargo-
+
+      - name: 安装 Tauri CLI
+        run: cargo install tauri-cli --version "^2.0" --locked
+
+      - name: 下载 runtime + core（setup）
+        run: node tauri-spike/backend/bin/setup.mjs
+
+      - name: 同步 resources（sync-resources）
+        run: node tauri-spike/scripts/sync-resources.mjs
+
+      - name: 安装前端依赖
+        run: npm ci
+        working-directory: src/tauri-spike/frontend
+
+      - name: 构建前端（pc 模式）
+        run: npm run build:pc
+        working-directory: src/tauri-spike/frontend
+
+      - name: 发布 linux-pc
+        env:
+          RVAI_RELEASE_EMAIL: ${{ secrets.RVAI_RELEASE_EMAIL }}
+          RVAI_RELEASE_PASSWORD: ${{ secrets.RVAI_RELEASE_PASSWORD }}
+        run: |
+          node tauri-spike/scripts/release/release-publish.mjs \
+            --ci --skip-bump --skip-tag \
+            --platform linux --form pc
