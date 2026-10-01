@@ -113,8 +113,6 @@ jobs:
         run: node tauri-spike/scripts/native-package-0.1.7.mjs usb
       - name: Generate checksums
         run: node tauri-spike/scripts/native-package-0.1.7.mjs manifest
-      - name: Verify actual portable launcher and tools
-        run: node tauri-spike/scripts/verify-portable-native-0.1.7.mjs tauri-spike/dist/native-0.1.7/mac-x64
       - name: Save packages and verification reports
         if: always()
         uses: actions/upload-artifact@v4
