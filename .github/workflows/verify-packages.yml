@@ -1,0 +1,62 @@
+name: verify-packages
+on:
+  workflow_dispatch:
+    inputs:
+      source-ref:
+        required: true
+        type: string
+      build-run:
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac
+            arch: arm64
+            runner: macos-15
+          - platform: mac
+            arch: x64
+            runner: macos-15-intel
+          - platform: linux
+            arch: x64
+            runner: ubuntu-22.04
+    name: verify-${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: ${{ inputs.source-ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - name: Install Linux WebView runtime
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb python3-gi gir1.2-webkit2-4.1
+      - uses: actions/download-artifact@v4
+        with:
+          name: robovai-0.1.7-${{ matrix.platform }}-${{ matrix.arch }}
+          run-id: ${{ inputs.build-run }}
+          github-token: ${{ github.token }}
+          path: packages
+      - name: Verify real portable launcher and AI tools
+        working-directory: src
+        run: |
+          export GITHUB_SOURCE_SHA="$(git rev-parse HEAD)"
+          node tauri-spike/scripts/verify-portable-native-0.1.7.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robovai-0.1.7-verified-${{ matrix.platform }}-${{ matrix.arch }}
+          path: packages/
+          compression-level: 0
+          retention-days: 14
