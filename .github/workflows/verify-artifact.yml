@@ -1,0 +1,60 @@
+name: verify-artifact
+on:
+  workflow_dispatch:
+    inputs:
+      source-ref:
+        required: true
+        type: string
+      platform:
+        required: true
+        type: choice
+        options: [mac, linux]
+      arch:
+        required: true
+        type: choice
+        options: [arm64, x64]
+      build-run:
+        required: true
+        type: string
+      artifact-name:
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ${{ inputs.platform == 'linux' && 'ubuntu-22.04' || (inputs.arch == 'arm64' && 'macos-15' || 'macos-15-intel') }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: ${{ inputs.source-ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact-name }}
+          run-id: ${{ inputs.build-run }}
+          github-token: ${{ github.token }}
+          path: packages
+      - name: Install Linux WebView dependencies
+        if: inputs.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-webkit2-4.1 xvfb
+      - name: Verify native launcher and all three engines
+        working-directory: src
+        run: node tauri-spike/scripts/verify-portable-native-0.1.7.mjs ../packages
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: robovai-0.1.7-verified-${{ inputs.platform }}-${{ inputs.arch }}
+          path: packages/
+          compression-level: 0
+          retention-days: 14
