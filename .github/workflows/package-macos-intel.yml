@@ -1,0 +1,115 @@
+name: package-macos-intel
+run-name: Package RoboVAI ${{ inputs.version }}
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version
+        required: true
+        type: string
+      source-ref:
+        description: Private source snapshot ref
+        required: true
+        type: string
+permissions:
+  contents: read
+defaults:
+  run:
+    working-directory: src
+jobs:
+  native:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac
+            arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: ${{ inputs.source-ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+          cache: npm
+          cache-dependency-path: src/tauri-spike/frontend/package-lock.json
+      - name: Validate version and platform
+        run: |
+          node -e "const fs=require('fs');const v=JSON.parse(fs.readFileSync('tauri-spike/src-tauri/tauri.conf.json')).version;if(v!==process.env.PACKAGE_VERSION)throw Error('Version mismatch');if(process.arch!==process.env.PACKAGE_ARCH)throw Error('Architecture mismatch');console.log(v,process.platform,process.arch)"
+          echo "GITHUB_SOURCE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+          PACKAGE_ARCH: ${{ matrix.arch }}
+      - name: Install Linux desktop dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 python3-gi gir1.2-webkit2-4.1
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check Mac portable host syntax
+        if: matrix.platform == 'mac'
+        continue-on-error: true
+        run: swiftc -typecheck portable/mac/host/RoboVAIHost.swift
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src/tauri-spike/src-tauri
+          key: package-${{ matrix.platform }}-${{ matrix.arch }}
+          cache-on-failure: true
+      - name: Restore platform runtimes and tools
+        id: tools-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            src/tauri-spike/backend/app/runtime
+            src/tauri-spike/backend/app/core
+          key: robovai-tools-${{ matrix.platform }}-${{ matrix.arch }}-${{ hashFiles('src/tauri-spike/backend/tools/**/tool.json', 'src/tauri-spike/backend/lib/runtime-fetch.mjs') }}
+      - name: Install platform runtimes and tools
+        run: node tauri-spike/backend/bin/setup.mjs
+      - name: Save platform runtimes and tools
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            src/tauri-spike/backend/app/runtime
+            src/tauri-spike/backend/app/core
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
+      - name: Sync runtime resources
+        run: node tauri-spike/scripts/sync-resources.mjs
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: src/tauri-spike/frontend
+      - name: Build PC frontend
+        run: npm run build:pc
+        working-directory: src/tauri-spike/frontend
+      - name: Package and verify desktop
+        run: node tauri-spike/scripts/native-package-0.1.7.mjs pc
+      - name: Package AppImage
+        if: matrix.platform == 'linux'
+        continue-on-error: true
+        run: node tauri-spike/scripts/native-package-0.1.7.mjs appimage
+      - name: Build portable frontend
+        run: npm run build:usb
+        working-directory: src/tauri-spike/frontend
+      - name: Package and verify portable
+        run: node tauri-spike/scripts/native-package-0.1.7.mjs usb
+      - name: Generate checksums
+        run: node tauri-spike/scripts/native-package-0.1.7.mjs manifest
+      - name: Verify actual portable launcher and tools
+        run: node tauri-spike/scripts/verify-portable-native-0.1.7.mjs tauri-spike/dist/native-0.1.7/mac-x64
+      - name: Save packages and verification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: robovai-${{ inputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: src/tauri-spike/dist/native-0.1.7/${{ matrix.platform }}-${{ matrix.arch }}/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
