@@ -56,7 +56,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Check Mac portable host syntax
         if: matrix.platform == 'mac'
-        continue-on-error: true
         run: swiftc -typecheck portable/mac/host/RoboVAIHost.swift
       - uses: Swatinem/rust-cache@v2
         with:
