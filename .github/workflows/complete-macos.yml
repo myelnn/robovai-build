@@ -12,6 +12,10 @@ on:
       build-run:
         required: true
         type: string
+      desktop-source:
+        required: false
+        default: 9b2492be1c1122e0eadf2b34353b207965de907e
+        type: string
 permissions:
   contents: read
   actions: read
@@ -53,7 +57,7 @@ jobs:
       - name: Generate checksums
         working-directory: src
         env:
-          GITHUB_SOURCE_SHA: 9b2492be1c1122e0eadf2b34353b207965de907e
+          GITHUB_SOURCE_SHA: ${{ inputs.desktop-source }}
         run: node tauri-spike/scripts/native-package-0.1.7.mjs manifest
       - name: Verify actual portable launcher and tools
         working-directory: src
