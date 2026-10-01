@@ -93,7 +93,7 @@ jobs:
             src/tauri-spike/backend/app/core
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: Sync runtime resources
-        run: node tauri-spike/scripts/sync-resources.mjs
+        run: tauri-spike/backend/app/runtime/node-mac-x64/bin/node tauri-spike/scripts/sync-resources.mjs
       - name: Install frontend dependencies
         run: npm ci
         working-directory: src/tauri-spike/frontend
