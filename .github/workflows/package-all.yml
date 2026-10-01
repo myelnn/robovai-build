@@ -1,4 +1,4 @@
-name: package-all
+name: package-linux
 run-name: Package RoboVAI ${{ inputs.version }}
 on:
   workflow_dispatch:
@@ -23,12 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: mac
-            arch: arm64
-            runner: macos-15
-          - platform: mac
-            arch: x64
-            runner: macos-15-intel
           - platform: linux
             arch: x64
             runner: ubuntu-22.04
@@ -58,7 +52,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 python3-gi gir1.2-webkit2-4.1
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf libfuse2 python3-gi gir1.2-webkit2-4.1 xvfb
       - uses: dtolnay/rust-toolchain@stable
       - name: Check Mac portable host syntax
         if: matrix.platform == 'mac'
@@ -68,8 +62,25 @@ jobs:
         with:
           workspaces: src/tauri-spike/src-tauri
           key: package-${{ matrix.platform }}-${{ matrix.arch }}
+          cache-on-failure: true
+      - name: Restore platform runtimes and tools
+        id: tools-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            src/tauri-spike/backend/app/runtime
+            src/tauri-spike/backend/app/core
+          key: robovai-tools-${{ matrix.platform }}-${{ matrix.arch }}-${{ hashFiles('src/tauri-spike/backend/tools/**/tool.json', 'src/tauri-spike/backend/lib/runtime-fetch.mjs') }}
       - name: Install platform runtimes and tools
         run: node tauri-spike/backend/bin/setup.mjs
+      - name: Save platform runtimes and tools
+        if: steps.tools-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            src/tauri-spike/backend/app/runtime
+            src/tauri-spike/backend/app/core
+          key: ${{ steps.tools-cache.outputs.cache-primary-key }}
       - name: Sync runtime resources
         run: node tauri-spike/scripts/sync-resources.mjs
       - name: Install frontend dependencies
@@ -80,6 +91,9 @@ jobs:
         working-directory: src/tauri-spike/frontend
       - name: Package and verify desktop
         run: node tauri-spike/scripts/native-package-0.1.7.mjs pc
+      - name: Package AppImage
+        if: matrix.platform == 'linux'
+        run: node tauri-spike/scripts/native-package-0.1.7.mjs appimage
       - name: Build portable frontend
         run: npm run build:usb
         working-directory: src/tauri-spike/frontend
@@ -87,6 +101,8 @@ jobs:
         run: node tauri-spike/scripts/native-package-0.1.7.mjs usb
       - name: Generate checksums
         run: node tauri-spike/scripts/native-package-0.1.7.mjs manifest
+      - name: Verify actual portable launcher
+        run: node tauri-spike/scripts/verify-portable-native-0.1.7.mjs tauri-spike/dist/native-0.1.7/linux-x64
       - name: Save packages and verification reports
         if: always()
         uses: actions/upload-artifact@v4
