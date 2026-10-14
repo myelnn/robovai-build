@@ -49,12 +49,12 @@ jobs:
             arch: arm64
             runner: macos-15
             target: aarch64-apple-darwin
-            bundle: dmg
+            bundle: app
           - platform: macos
             arch: x64
             runner: macos-15-intel
             target: x86_64-apple-darwin
-            bundle: dmg
+            bundle: app
     defaults:
       run:
         working-directory: src
@@ -177,7 +177,37 @@ jobs:
         env:
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
-        run: node tauri-spike/scripts/verify-unix-package.mjs installer --platform "$PLATFORM" --arch "$ARCH"
+        run: |
+          if [ "$PLATFORM" = linux ]; then
+            node tauri-spike/scripts/verify-unix-package.mjs installer --platform "$PLATFORM" --arch "$ARCH"
+          else
+            node --input-type=module <<'NODE'
+          import {assertReleaseArtifact} from './tauri-spike/scripts/lib/release-audit.mjs';
+          import {readdir,readFile,writeFile} from 'node:fs/promises';
+          import {createReadStream} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {execFileSync} from 'node:child_process';
+          const version=JSON.parse(await readFile('package.json','utf8')).version,arch=process.env.ARCH;
+          const appDir='tauri-spike/src-tauri/target/release/bundle/macos';
+          const apps=(await readdir(appDir)).filter(name=>name.endsWith('.app'));
+          if(apps.length!==1||!['arm64','x64'].includes(arch))throw new Error('Invalid native app');
+          const audit=await assertReleaseArtifact(appDir+'/'+apps[0]);
+          const out='tauri-spike/dist/unix-macos-'+arch;
+          const appArchive=out+'/robovai-pc-app-'+version+'-mac-'+arch+'.app.tar.gz';
+          execFileSync('tar',['-czf',appArchive,'-C',appDir,apps[0]],{stdio:'inherit'});
+          await assertReleaseArtifact(appArchive);
+          await writeFile(out+'/installer-audit.json',JSON.stringify({...audit,platform:'macos',arch,version},null,2));
+          const artifacts=[];
+          for(const name of await readdir(out))if(name.endsWith('.tar.gz')){
+            let bytes=0;const hash=createHash('sha256');
+            for await(const chunk of createReadStream(out+'/'+name)){bytes+=chunk.length;hash.update(chunk)}
+            artifacts.push({name,bytes,sha256:hash.digest('hex')});
+          }
+          if(artifacts.length!==2)throw new Error('Expected USB archive and native app archive');
+          await writeFile(out+'/artifacts.json',JSON.stringify({version,platform:'macos',arch,sourceCommit:process.env.RVAI_SOURCE_COMMIT,artifacts},null,2));
+          console.log(JSON.stringify({ok:true,arch,artifacts}));
+          NODE
+          fi
       - name: Upload distributables and verification results
         if: steps.selected.outputs.run == 'true'
         uses: actions/upload-artifact@v4
