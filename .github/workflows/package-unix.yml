@@ -21,9 +21,14 @@ on:
         type: choice
         options: [both, linux, macos]
         default: both
+      engine-lock-run:
+        description: Optional ARM build run with verified DSH dependency lock
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   package:
@@ -120,6 +125,35 @@ jobs:
           npm ci --prefix tauri-spike/frontend
           node scripts/check-licenses.cjs
           node scripts/scan-secrets.cjs
+      - name: Download verified engine dependency lock
+        if: steps.selected.outputs.run == 'true' && matrix.platform == 'macos' && matrix.arch == 'x64' && inputs.engine-lock-run != ''
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.engine-lock-run }}
+          name: robovai-0.1.8-macos-arm64
+          path: engine-lock
+      - name: Install DSH from the verified dependency lock
+        if: steps.selected.outputs.run == 'true' && matrix.platform == 'macos' && matrix.arch == 'x64' && inputs.engine-lock-run != ''
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: |
+          node --input-type=module <<'NODE'
+          import {readFileSync, mkdirSync, writeFileSync} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {execFileSync} from 'node:child_process';
+          const dir='../engine-lock', report=JSON.parse(readFileSync(dir+'/artifacts.json','utf8'));
+          if(report.sourceCommit!==process.env.RVAI_SOURCE_COMMIT||report.platform!=='macos'||report.arch!=='arm64')throw new Error('Engine lock provenance mismatch');
+          const archive=report.artifacts.find(item=>/^robovai-usb-portable-0\.1\.8-mac-arm64\.tar\.gz$/.test(item.name));
+          if(!archive)throw new Error('Missing verified portable archive');
+          const file=dir+'/'+archive.name, bytes=readFileSync(file);
+          if(bytes.length!==archive.bytes||createHash('sha256').update(bytes).digest('hex')!==archive.sha256)throw new Error('Engine archive integrity mismatch');
+          const core=execFileSync('tar',['-xOzf',file,'robovai-usb-portable-0.1.8-mac-arm64/resources/portable/app/core/ow.tar.gz'],{maxBuffer:512*1024**2});
+          writeFileSync('../engine-lock/core.tar.gz',core);
+          mkdirSync('tauri-spike/backend/app/core/dsh',{recursive:true});
+          for(const name of ['package.json','package-lock.json'])writeFileSync('tauri-spike/backend/app/core/dsh/'+name,execFileSync('tar',['-xOzf','../engine-lock/core.tar.gz','dsh/'+name],{maxBuffer:8*1024**2}));
+          NODE
+          npm ci --prefix tauri-spike/backend/app/core/dsh --ignore-scripts --omit=dev --no-audit --no-fund --cache tauri-spike/backend/app/.npm-cache
       - name: Prepare native engines
         if: steps.selected.outputs.run == 'true'
         run: node tauri-spike/backend/bin/setup.mjs
