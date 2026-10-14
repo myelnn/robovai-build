@@ -1,0 +1,117 @@
+name: package-mac-universal
+on:
+  workflow_dispatch:
+    inputs:
+      source-ref:
+        description: Exact merge source commit
+        required: true
+        type: string
+      native-ref:
+        description: Exact native source commit
+        required: true
+        type: string
+      arm-run:
+        description: Successful Apple Silicon build run
+        required: true
+        type: string
+      intel-run:
+        description: Successful Intel build run
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+env:
+  RVAI_SOURCE_COMMIT: ${{ inputs.source-ref }}
+  RVAI_NATIVE_SOURCE_COMMIT: ${{ inputs.native-ref }}
+jobs:
+  merge:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: ${{ inputs.source-ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: src
+      - name: Validate pinned merge source
+        working-directory: src
+        run: |
+          node -e "if(!/^[a-f0-9]{40}$/.test(process.env.RVAI_SOURCE_COMMIT)||!/^[a-f0-9]{40}$/.test(process.env.RVAI_NATIVE_SOURCE_COMMIT))throw new Error('Invalid provenance')"
+          test "$(git rev-parse HEAD)" = "$RVAI_SOURCE_COMMIT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Download verified ARM packages
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.arm-run }}
+          name: robovai-0.1.8-macos-arm64
+          path: arm
+      - name: Download verified Intel packages
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.intel-run }}
+          name: robovai-0.1.8-macos-x64
+          path: intel
+      - name: Build universal app and portable host
+        working-directory: src
+        run: |
+          npm ci
+          node --test tests/core-platform.test.mjs
+          node tauri-spike/scripts/merge-mac-universal.mjs --arm ../arm --intel ../intel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robovai-0.1.8-macos-universal2
+          path: src/tauri-spike/dist/unix-macos-universal2/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+  verify:
+    needs: merge
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: ${{ inputs.source-ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: src
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: robovai-0.1.8-macos-universal2
+          path: universal
+      - name: Verify final packages on native processor
+        working-directory: src
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$RVAI_SOURCE_COMMIT"
+          npm ci
+          node tauri-spike/scripts/verify-unix-package.mjs portable --platform macos --arch "$ARCH" --archive "../universal/robovai-usb-portable-0.1.8-mac-universal2.tar.gz"
+          node tauri-spike/scripts/verify-mac-universal.mjs ../universal
+      - uses: actions/upload-artifact@v4
+        with:
+          name: robovai-0.1.8-macos-universal-proof-${{ matrix.arch }}
+          path: |
+            src/tauri-spike/dist/unix-macos-${{ matrix.arch }}/portable-smoke.json
+            universal/universal-pc-smoke-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 14
