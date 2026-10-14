@@ -1,0 +1,155 @@
+name: package-unix
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version
+        required: true
+        type: string
+      source-ref:
+        description: Exact private source commit
+        required: true
+        type: string
+      mac-arch:
+        description: macOS processor
+        type: choice
+        options: [arm64, x64, both]
+        default: arm64
+      platforms:
+        description: Platforms to package
+        type: choice
+        options: [both, linux, macos]
+        default: both
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    if: inputs.version == '0.1.8'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux
+            arch: x64
+            runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundle: deb
+          - platform: macos
+            arch: arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+            bundle: dmg
+          - platform: macos
+            arch: x64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            bundle: dmg
+    defaults:
+      run:
+        working-directory: src
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: '2'
+      NEXT_TELEMETRY_DISABLED: '1'
+      RVAI_SOURCE_COMMIT: ${{ inputs.source-ref }}
+    steps:
+      - name: Select requested architecture
+        id: selected
+        working-directory: ${{ github.workspace }}
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+          MAC_ARCH: ${{ inputs.mac-arch }}
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          if { [ "$PLATFORMS" = both ] || [ "$PLATFORMS" = "$PLATFORM" ]; } && { [ "$PLATFORM" = linux ] || [ "$MAC_ARCH" = both ] || [ "$ARCH" = "$MAC_ARCH" ]; }; then
+            echo 'run=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'run=false' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Checkout private source
+        if: steps.selected.outputs.run == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: myelnn/robovaiUSB
+          ref: ${{ inputs.source-ref }}
+          token: ${{ secrets.SOURCE_READ_TOKEN }}
+          persist-credentials: false
+          path: src
+      - name: Verify source version
+        if: steps.selected.outputs.run == 'true'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          node -e "if(require('./package.json').version!==process.env.VERSION||!/^([a-f0-9]{40})$/.test(process.env.RVAI_SOURCE_COMMIT))throw new Error('Source version or commit mismatch')"
+          test "$(git rev-parse HEAD)" = "$RVAI_SOURCE_COMMIT"
+      - name: Setup Node
+        if: steps.selected.outputs.run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+      - name: Linux system dependencies
+        if: steps.selected.outputs.run == 'true' && matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1
+      - name: Setup Rust
+        if: steps.selected.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache Rust dependencies
+        if: steps.selected.outputs.run == 'true'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src/tauri-spike/src-tauri/target
+          key: package-unix-${{ matrix.platform }}-${{ matrix.arch }}-${{ hashFiles('src/tauri-spike/src-tauri/Cargo.lock') }}
+      - name: Install build dependencies
+        if: steps.selected.outputs.run == 'true'
+        run: |
+          npm ci
+          npm ci --prefix tauri-spike/frontend
+          node scripts/check-licenses.cjs
+          node scripts/scan-secrets.cjs
+      - name: Prepare native engines
+        if: steps.selected.outputs.run == 'true'
+        run: node tauri-spike/backend/bin/setup.mjs
+      - name: Build and verify portable archive
+        if: steps.selected.outputs.run == 'true'
+        env:
+          TARGET: ${{ matrix.target }}
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          node tauri-spike/scripts/build-webview-portable.mjs --target "$TARGET"
+          node tauri-spike/scripts/verify-unix-package.mjs portable --platform "$PLATFORM" --arch "$ARCH"
+      - name: Build native installer
+        if: steps.selected.outputs.run == 'true'
+        working-directory: src/tauri-spike/src-tauri
+        env:
+          BUNDLE: ${{ matrix.bundle }}
+        run: npm exec --yes --package=@tauri-apps/cli@2.11.4 -- tauri build --features pc --bundles "$BUNDLE"
+      - name: Audit native installer and collect artifacts
+        if: steps.selected.outputs.run == 'true'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: node tauri-spike/scripts/verify-unix-package.mjs installer --platform "$PLATFORM" --arch "$ARCH"
+      - name: Upload distributables and verification results
+        if: steps.selected.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: robovai-0.1.8-${{ matrix.platform }}-${{ matrix.arch }}
+          path: src/tauri-spike/dist/unix-${{ matrix.platform }}-${{ matrix.arch }}/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
