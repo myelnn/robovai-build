@@ -2,6 +2,10 @@ name: package-mac-universal
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: Release version
+        required: true
+        type: string
       source-ref:
         description: Exact merge source commit
         required: true
@@ -49,14 +53,14 @@ jobs:
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.arm-run }}
-          name: robovai-0.1.8-macos-arm64
+          name: robovai-${{ inputs.version }}-macos-arm64
           path: arm
       - name: Download verified Intel packages
         uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.intel-run }}
-          name: robovai-0.1.8-macos-x64
+          name: robovai-${{ inputs.version }}-macos-x64
           path: intel
       - name: Build universal app and portable host
         working-directory: src
@@ -66,7 +70,7 @@ jobs:
           node tauri-spike/scripts/merge-mac-universal.mjs --arm ../arm --intel ../intel
       - uses: actions/upload-artifact@v4
         with:
-          name: robovai-0.1.8-macos-universal2
+          name: robovai-${{ inputs.version }}-macos-universal2
           path: src/tauri-spike/dist/unix-macos-universal2/*
           if-no-files-found: error
           compression-level: 0
@@ -96,20 +100,21 @@ jobs:
           node-version: '24'
       - uses: actions/download-artifact@v4
         with:
-          name: robovai-0.1.8-macos-universal2
+          name: robovai-${{ inputs.version }}-macos-universal2
           path: universal
       - name: Verify final packages on native processor
         working-directory: src
         env:
           ARCH: ${{ matrix.arch }}
+          VERSION: ${{ inputs.version }}
         run: |
           test "$(git rev-parse HEAD)" = "$RVAI_SOURCE_COMMIT"
           npm ci
-          node tauri-spike/scripts/verify-unix-package.mjs portable --platform macos --arch "$ARCH" --archive "../universal/robovai-usb-portable-0.1.8-mac-universal2.tar.gz"
+          node tauri-spike/scripts/verify-unix-package.mjs portable --platform macos --arch "$ARCH" --archive "../universal/robovai-usb-portable-${VERSION}-mac-universal2.tar.gz"
           node tauri-spike/scripts/verify-mac-universal.mjs ../universal
       - uses: actions/upload-artifact@v4
         with:
-          name: robovai-0.1.8-macos-universal-proof-${{ matrix.arch }}
+          name: robovai-${{ inputs.version }}-macos-universal-proof-${{ matrix.arch }}
           path: |
             src/tauri-spike/dist/unix-macos-${{ matrix.arch }}/portable-smoke.json
             universal/universal-pc-smoke-${{ matrix.arch }}.json
