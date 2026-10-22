@@ -25,6 +25,22 @@ on:
         description: Optional ARM build run with verified DSH dependency lock
         type: string
         default: ''
+      runtime-cache-run:
+        description: Optional verified native runtime artifact run
+        type: string
+        default: ''
+      intel-runtime-cache-run:
+        description: Optional Intel runtime artifact run override
+        type: string
+        default: ''
+      runtime-cache-version:
+        description: Version of the verified runtime artifact
+        type: string
+        default: ''
+      runtime-cache-source:
+        description: Exact source commit of the verified runtime artifact
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -63,6 +79,9 @@ jobs:
       NEXT_TELEMETRY_DISABLED: '1'
       RVAI_SOURCE_COMMIT: ${{ inputs.source-ref }}
       VERSION: ${{ inputs.version }}
+      RUNTIME_CACHE_VERSION: ${{ inputs.runtime-cache-version }}
+      RUNTIME_CACHE_SOURCE: ${{ inputs.runtime-cache-source }}
+      RUNTIME_CACHE_RUN: ${{ matrix.platform == 'macos' && matrix.arch == 'x64' && inputs.intel-runtime-cache-run || inputs.runtime-cache-run }}
     steps:
       - name: Select requested architecture
         id: selected
@@ -154,8 +173,57 @@ jobs:
           for(const name of ['package.json','package-lock.json'])writeFileSync('tauri-spike/backend/app/core/dsh/'+name,execFileSync('tar',['-xOzf','../engine-lock/core.tar.gz','dsh/'+name],{maxBuffer:8*1024**2}));
           NODE
           npm ci --prefix tauri-spike/backend/app/core/dsh --ignore-scripts --omit=dev --no-audit --no-fund --cache tauri-spike/backend/app/.npm-cache
+      - name: Download verified native runtime
+        if: steps.selected.outputs.run == 'true' && inputs.runtime-cache-run != ''
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ env.RUNTIME_CACHE_RUN }}
+          name: robovai-${{ inputs.runtime-cache-version }}-${{ matrix.platform }}-${{ matrix.arch }}
+          path: engine-cache
+      - name: Restore verified native runtime
+        if: steps.selected.outputs.run == 'true' && inputs.runtime-cache-run != ''
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {readFile,writeFile,mkdir,rm,unlink} from 'node:fs/promises';
+          import {createReadStream} from 'node:fs';
+          import {createHash} from 'node:crypto';
+          import {resolve,join,dirname} from 'node:path';
+          import {execFileSync} from 'node:child_process';
+          import {NODE_VERSION} from './tauri-spike/backend/lib/runtime-fetch.mjs';
+          const cache=resolve('../engine-cache'),report=JSON.parse(await readFile(join(cache,'artifacts.json'),'utf8'));
+          const {PLATFORM:platform,ARCH:arch,RUNTIME_CACHE_VERSION:version,RUNTIME_CACHE_SOURCE:source}=process.env;
+          assert.match(source,/^[a-f0-9]{40}$/);assert.match(version,/^\d+\.\d+\.\d+$/);
+          assert.equal(report.sourceCommit,source);assert.equal(report.version,version);assert.equal(report.platform,platform);assert.equal(report.arch,arch);
+          const os=platform==='macos'?'mac':'linux',label=`robovai-usb-portable-${version}-${os}-${arch}`;
+          const item=report.artifacts.find(a=>a.name===label+'.tar.gz');assert.ok(item,'Verified portable runtime archive missing');
+          const archive=join(cache,item.name),hash=createHash('sha256');let bytes=0;
+          for await(const chunk of createReadStream(archive)){bytes+=chunk.length;hash.update(chunk);}
+          assert.equal(bytes,item.bytes);assert.equal(hash.digest('hex'),item.sha256);
+          const backend=resolve('tauri-spike/backend');await mkdir(join(backend,'app'),{recursive:true});
+          execFileSync('tar',['-xzf',archive,'-C',backend,'--strip-components=3',label+'/resources/portable/app'],{stdio:'inherit'});
+          const core=join(backend,'app/core'),packed=join(core,'ow.tar.gz');
+          execFileSync('tar',['-xzf',packed,'-C',core],{stdio:'inherit'});await unlink(packed);
+          const runtime=join(backend,'app/runtime',`node-${os}-${arch}`,'bin/node');
+          const actual=execFileSync(runtime,['--version'],{encoding:'utf8'}).trim();assert.equal(actual.replace(/^v/,''),NODE_VERSION.replace(/^v/,''));
+          const tools=[];
+          for(const id of ['codex','dsh','openclaw']){
+            const expected=JSON.parse(await readFile(join(backend,'tools',id,'tool.json'),'utf8'));
+            const dir=id==='openclaw'?'ow':id;
+            const installed=JSON.parse(await readFile(join(core,dir,'node_modules',...expected.package.split('/'),'package.json'),'utf8'));
+            assert.equal(installed.version,expected.version);tools.push({id,version:installed.version});
+          }
+          await mkdir('tauri-spike/dist',{recursive:true});
+          await writeFile('tauri-spike/dist/runtime-provenance.json',JSON.stringify({sourceCommit:process.env.RVAI_SOURCE_COMMIT,runtimeSource:source,runtimeVersion:version,runtimeRun:process.env.RUNTIME_CACHE_RUN,platform,arch,node:actual,tools},null,2));
+          assert.equal(dirname(cache),resolve(process.env.GITHUB_WORKSPACE));await rm(cache,{recursive:true});
+          console.log(JSON.stringify({verifiedRuntime:true,platform,arch,node:actual,tools}));
+          NODE
       - name: Prepare native engines
-        if: steps.selected.outputs.run == 'true'
+        if: steps.selected.outputs.run == 'true' && inputs.runtime-cache-run == ''
         run: node tauri-spike/backend/bin/setup.mjs
       - name: Build and verify portable archive
         if: steps.selected.outputs.run == 'true'
