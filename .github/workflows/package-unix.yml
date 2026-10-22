@@ -33,7 +33,6 @@ permissions:
 jobs:
   package:
     name: ${{ matrix.platform }}-${{ matrix.arch }}
-    if: inputs.version == '0.1.8'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     strategy:
@@ -63,6 +62,7 @@ jobs:
       CARGO_BUILD_JOBS: '2'
       NEXT_TELEMETRY_DISABLED: '1'
       RVAI_SOURCE_COMMIT: ${{ inputs.source-ref }}
+      VERSION: ${{ inputs.version }}
     steps:
       - name: Select requested architecture
         id: selected
@@ -131,7 +131,7 @@ jobs:
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.engine-lock-run }}
-          name: robovai-0.1.8-macos-arm64
+          name: robovai-${{ inputs.version }}-macos-arm64
           path: engine-lock
       - name: Install DSH from the verified dependency lock
         if: steps.selected.outputs.run == 'true' && matrix.platform == 'macos' && matrix.arch == 'x64' && inputs.engine-lock-run != ''
@@ -144,11 +144,11 @@ jobs:
           import {execFileSync} from 'node:child_process';
           const dir='../engine-lock', report=JSON.parse(readFileSync(dir+'/artifacts.json','utf8'));
           if(report.sourceCommit!==process.env.RVAI_SOURCE_COMMIT||report.platform!=='macos'||report.arch!=='arm64')throw new Error('Engine lock provenance mismatch');
-          const archive=report.artifacts.find(item=>/^robovai-usb-portable-0\.1\.8-mac-arm64\.tar\.gz$/.test(item.name));
+          const archive=report.artifacts.find(item=>item.name===`robovai-usb-portable-${process.env.VERSION}-mac-arm64.tar.gz`);
           if(!archive)throw new Error('Missing verified portable archive');
           const file=dir+'/'+archive.name, bytes=readFileSync(file);
           if(bytes.length!==archive.bytes||createHash('sha256').update(bytes).digest('hex')!==archive.sha256)throw new Error('Engine archive integrity mismatch');
-          const core=execFileSync('tar',['-xOzf',file,'robovai-usb-portable-0.1.8-mac-arm64/resources/portable/app/core/ow.tar.gz'],{maxBuffer:512*1024**2});
+          const core=execFileSync('tar',['-xOzf',file,`robovai-usb-portable-${process.env.VERSION}-mac-arm64/resources/portable/app/core/ow.tar.gz`],{maxBuffer:512*1024**2});
           writeFileSync('../engine-lock/core.tar.gz',core);
           mkdirSync('tauri-spike/backend/app/core/dsh',{recursive:true});
           for(const name of ['package.json','package-lock.json'])writeFileSync('tauri-spike/backend/app/core/dsh/'+name,execFileSync('tar',['-xOzf','../engine-lock/core.tar.gz','dsh/'+name],{maxBuffer:8*1024**2}));
@@ -212,7 +212,7 @@ jobs:
         if: steps.selected.outputs.run == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: robovai-0.1.8-${{ matrix.platform }}-${{ matrix.arch }}
+          name: robovai-${{ inputs.version }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: src/tauri-spike/dist/unix-${{ matrix.platform }}-${{ matrix.arch }}/*
           if-no-files-found: error
           retention-days: 14
